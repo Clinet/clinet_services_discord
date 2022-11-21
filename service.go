@@ -2,19 +2,23 @@ package discord
 
 import (
 	"github.com/bwmarrin/discordgo"
+	"github.com/Clinet/clinet_features"
 	"github.com/Clinet/clinet_services"
 	"github.com/Clinet/clinet_storage"
 	"github.com/Clinet/discordgo-embed"
 	"github.com/JoshuaDoes/logger"
 )
 
-var Log *logger.Logger
+var Feature = features.Feature{
+	Name: "discord",
+	ServiceChat: &ClientDiscord{},
+}
+var Discord *ClientDiscord
 
+var Log *logger.Logger
 func init() {
 	Log = logger.NewLogger("discord", 2)
 }
-
-var Discord *ClientDiscord
 
 //ClientDiscord implements services.Service and holds a Discord session
 type ClientDiscord struct {
@@ -41,7 +45,7 @@ func (discord *ClientDiscord) Login() (err error) {
 	if err := cfg.LoadFrom("discord"); err != nil {
 		return err
 	}
-	token, err := cfg.ExtraGet("cfg", "token")
+	token, err := cfg.ConfigGet("cfg", "token")
 	if err != nil {
 		return err
 	}
@@ -65,22 +69,23 @@ func (discord *ClientDiscord) Login() (err error) {
 
 	Log.Info("Connected to Discord!")
 	Discord = &ClientDiscord{discordClient, nil, make([]*discordgo.VoiceConnection, 0), cfg}
+	discord = Discord
 
-	Log.Info("Recycling old application commands...")
-	if oldAppCmds, err := Discord.ApplicationCommands(Discord.State.User.ID, ""); err == nil {
+	/*Log.Info("Recycling old application commands...")
+	if oldAppCmds, err := discord.ApplicationCommands(discord.State.User.ID, ""); err == nil {
 		for _, cmd := range oldAppCmds {
 			Log.Trace("Deleting application command for ", cmd.Name)
-			if err := Discord.ApplicationCommandDelete(Discord.State.User.ID, "", cmd.ID); err != nil {
+			if err := discord.ApplicationCommandDelete(discord.State.User.ID, "", cmd.ID); err != nil {
 				return err
 			}
 		}
-	}
+	}*/
 
 	Log.Info("Registering application commands...")
 	Log.Warn("TODO: Batch overwrite commands, then get a list of commands from Discord that aren't in memory and delete them")
 	for _, cmd := range CmdsToAppCommands() {
 		Log.Trace("Registering cmd: ", cmd)
-		_, err := Discord.ApplicationCommandCreate(Discord.State.User.ID, "", cmd)
+		_, err := discord.ApplicationCommandCreate(discord.State.User.ID, "", cmd)
 		if err != nil {
 			Log.Fatal(services.Error("Unable to register cmd '%s': %v", cmd.Name, err))
 		}
@@ -103,8 +108,8 @@ func (discord *ClientDiscord) MsgSend(msg *services.Message) (ret *services.Mess
 			return nil, services.Error("discord: MsgSend(msg: %v): missing channel ID", msg)
 		}
 	case *discordgo.Interaction:
-		if msg.MessageID == "" {
-			return nil, services.Error("discord: MsgSend(msg: %v): missing interaction ID as message ID", msg)
+		if msg.Context == nil {
+			return nil, services.Error("discord: MsgSend(msg: %v): missing interaction as context", msg)
 		}
 	default:
 		//Sending a DM to a user should always be a regular message
