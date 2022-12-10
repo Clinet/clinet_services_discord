@@ -2,6 +2,7 @@ package discord
 
 import (
 	"github.com/bwmarrin/discordgo"
+	"github.com/Clinet/clinet_cmds"
 	"github.com/Clinet/clinet_features"
 	"github.com/Clinet/clinet_services"
 	"github.com/Clinet/clinet_storage"
@@ -26,6 +27,7 @@ type ClientDiscord struct {
 	User *discordgo.User
 	VCs  []*discordgo.VoiceConnection
 	Cfg  *storage.Storage
+	Storage *storage.Storage
 }
 
 func (discord *ClientDiscord) Shutdown() {
@@ -43,17 +45,22 @@ func (discord *ClientDiscord) Login() (err error) {
 	Log.Trace("--- StartDiscord() ---")
 	cfg := &storage.Storage{}
 	if err := cfg.LoadFrom("discord"); err != nil {
-		return err
+		return services.Error("discord: Unable to read config: %v", err)
 	}
 	token, err := cfg.ConfigGet("cfg", "token")
 	if err != nil {
-		return err
+		return services.Error("discord: Unable to read cfg:token from storage: %v", err)
+	}
+
+	state := &storage.Storage{}
+	if err := state.LoadFrom("discordstate"); err != nil {
+		return services.Error("discord: Unable to load state: %v", err)
 	}
 
 	Log.Debug("Creating Discord struct...")
 	discordClient, err := discordgo.New("Bot " + token.(string))
 	if err != nil {
-		return err
+		return services.Error("discord: Unable to create bot instance: %v", err)
 	}
 
 	Log.Info("Registering Discord event handlers...")
@@ -64,32 +71,35 @@ func (discord *ClientDiscord) Login() (err error) {
 	Log.Info("Connecting to Discord...")
 	err = discordClient.Open()
 	if err != nil {
-		return err
+		return services.Error("discord: Unable to connect to Discord: %v", err)
 	}
 
 	Log.Info("Connected to Discord!")
-	Discord = &ClientDiscord{discordClient, nil, make([]*discordgo.VoiceConnection, 0), cfg}
+	Discord = &ClientDiscord{discordClient, nil, make([]*discordgo.VoiceConnection, 0), cfg, state}
 	discord = Discord
 
-	/*Log.Info("Recycling old application commands...")
-	if oldAppCmds, err := discord.ApplicationCommands(discord.State.User.ID, ""); err == nil {
-		for _, cmd := range oldAppCmds {
-			Log.Trace("Deleting application command for ", cmd.Name)
-			if err := discord.ApplicationCommandDelete(discord.State.User.ID, "", cmd.ID); err != nil {
-				return err
+	Log.Info("Registering application commands...")
+	_, err = discord.ApplicationCommandBulkOverwrite(discord.State.User.ID, "", CmdsToAppCommands())
+	if err != nil {
+		return services.Error("discord: Unable to overwrite commands: %v", err)
+	}
+
+	Log.Info("Syncing application commands...")
+	appCmds, err := discord.ApplicationCommands(discord.State.User.ID, "")
+	if err != nil {
+		return services.Error("discord: Unable to retrieve commands: %v", err)
+	}
+
+	for _, appCmd := range appCmds {
+		if cmds.GetCmd(appCmd.Name) == nil {
+			Log.Warn("Deleting old command: " + appCmd.Name)
+			err = discord.ApplicationCommandDelete(discord.State.User.ID, "", appCmd.ID)
+			if err != nil {
+				return services.Error("discord: Unable to delete old command %s: %v", appCmd.Name, err)
 			}
 		}
-	}*/
-
-	Log.Info("Registering application commands...")
-	Log.Warn("TODO: Batch overwrite commands, then get a list of commands from Discord that aren't in memory and delete them")
-	for _, cmd := range CmdsToAppCommands() {
-		Log.Trace("Registering cmd: ", cmd)
-		_, err := discord.ApplicationCommandCreate(discord.State.User.ID, "", cmd)
-		if err != nil {
-			Log.Fatal(services.Error("Unable to register cmd '%s': %v", cmd.Name, err))
-		}
 	}
+
 	Log.Info("Application commands ready for use!")
 	return nil
 }
@@ -100,7 +110,7 @@ func (discord *ClientDiscord) MsgEdit(msg *services.Message) (ret *services.Mess
 func (discord *ClientDiscord) MsgRemove(msg *services.Message) (err error) {
 	return nil
 }
-func (discord *ClientDiscord) MsgSend(msg *services.Message) (ret *services.Message, err error) {
+func (discord *ClientDiscord) MsgSend(msg *services.Message, ref interface{}) (ret *services.Message, err error) {
 	msgContext := msg.Context
 	switch msgContext.(type) {
 	case *discordgo.Message:
@@ -125,16 +135,21 @@ func (discord *ClientDiscord) MsgSend(msg *services.Message) (ret *services.Mess
 	}
 
 	var discordMsg *discordgo.Message
-	if msg.Title != "" || msg.Color != nil || msg.Image != "" {
+	if msg.Title != "" || msg.Color > 0 || msg.Image != "" {
 		retEmbed := embed.NewEmbed().SetDescription(msg.Content)
 		if msg.Title != "" {
 			retEmbed.SetTitle(msg.Title)
 		}
-		if msg.Color != nil {
-			retEmbed.SetColor(*msg.Color)
+		if msg.Color > 0 {
+			retEmbed.SetColor(msg.Color)
 		}
 		if msg.Image != "" {
 			retEmbed.SetImage(msg.Image)
+		}
+		if len(msg.Fields) > 0 {
+			for i := 0; i < len(msg.Fields); i++ {
+				retEmbed.AddField(msg.Fields[i].Name, msg.Fields[i].Value)
+			}
 		}
 
 		switch msgContext.(type) {
@@ -166,7 +181,11 @@ func (discord *ClientDiscord) MsgSend(msg *services.Message) (ret *services.Mess
 			interaction := msg.Context.(*discordgo.Interaction)
 			err = discord.InteractionRespond(interaction, interactionResp)
 		default:
-			discordMsg, err = discord.ChannelMessageSend(msg.ChannelID, msg.Content)
+			discordMsgSend := &discordgo.MessageSend{Content: msg.Content}
+			if ref != nil {
+				discordMsgSend.Reference = ref.(*discordgo.MessageReference)
+			}
+			discordMsg, err = discord.ChannelMessageSendComplex(msg.ChannelID, discordMsgSend)
 		}
 	}
 	if err != nil {

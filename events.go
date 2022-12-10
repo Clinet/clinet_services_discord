@@ -21,10 +21,17 @@ func discordMessageCreate(session *discordgo.Session, event *discordgo.MessageCr
 	Log.Trace("--- discordMessageCreate(", event, ") ---")
 	message, err := session.ChannelMessage(event.ChannelID, event.ID)
 	if err != nil {
-		Log.Error(message, err)
+		Log.Error(err)
+		return
 	}
 
-	cmdResps, err := convoHandler(session, message)
+	channel, err := session.Channel(event.ChannelID)
+	if err != nil {
+		Log.Error(err)
+		return
+	}
+
+	cmdResps, err := convoHandler(session, message, channel)
 	if err != nil {
 		Log.Error(err)
 	}
@@ -38,8 +45,8 @@ func discordMessageCreate(session *discordgo.Session, event *discordgo.MessageCr
 			Log.Trace("Response to message for convo: " + r.String())
 			r.Context = event.Message
 			r.ChannelID = event.ChannelID
-				
-			msg, err := Discord.MsgSend(r.Message)
+
+			msg, err := Discord.MsgSend(r.Message, message.Reference())
 			if err != nil {
 				Log.Error(err)
 				return
@@ -70,8 +77,8 @@ func discordInteractionCreate(session *discordgo.Session, event *discordgo.Inter
 			cmdResps[i].OnReady(func(r *cmds.CmdResp) {
 				Log.Trace("Response to interaction for cmd " + cmdAlias + ": " + r.String())
 				r.Context = event.Interaction
-				
-				msg, err := Discord.MsgSend(r.Message)
+
+				msg, err := Discord.MsgSend(r.Message, nil)
 				if err != nil {
 					Log.Error(err)
 					return
